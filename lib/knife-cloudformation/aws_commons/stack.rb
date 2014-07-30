@@ -83,7 +83,7 @@ module KnifeCloudformation
 
       ## Actions ##
 
-      def update(definition)
+      def update(name, definition)
         if(definition.keys.detect{|k|k.is_a?(Symbol)})
           definition = format_definition(definition)
         end
