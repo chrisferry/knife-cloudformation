@@ -53,7 +53,7 @@ class Chef
 
       def create_stack(name, stack)
         begin
-          res = aws.update(name, stack)
+          res = aws.update_stack(name, stack)
         rescue => e
           ui.fatal "Failed to update stack #{name}. Reason: #{e}"
           _debug(e, "Generated template used:\n#{_format_json(stack['TemplateBody'])}")
