@@ -231,7 +231,7 @@ module KnifeCloudformation
     
     def update_stack(name, definition)
       #Stack.update(name, definition)
-      Stack.stack(name).update(name, definition)
+      stack(name).update(name, definition)
     end
 
     # Output Helpers
