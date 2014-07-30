@@ -228,6 +228,10 @@ module KnifeCloudformation
     def create_stack(name, definition)
       Stack.create(name, definition, self)
     end
+    
+    def update_stack(name, definition)
+      Stack.update(name, definition)
+    end
 
     # Output Helpers
 
