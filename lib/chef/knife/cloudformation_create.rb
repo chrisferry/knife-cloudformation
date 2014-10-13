@@ -1,125 +1,149 @@
 require 'sparkle_formation'
 require 'pathname'
-require 'knife-cloudformation/cloudformation_base'
+require 'knife-cloudformation'
 
 class Chef
   class Knife
+    # Cloudformation create command
     class CloudformationCreate < Knife
 
-      include KnifeCloudformation::KnifeBase
+      include KnifeCloudformation::Knife::Base
+      include KnifeCloudformation::Knife::Template
+      include KnifeCloudformation::Knife::Stack
 
       banner 'knife cloudformation create NAME'
 
-      module Options
-        class << self
-          def included(klass)
-            klass.class_eval do
+      option(:timeout,
+        :short => '-t MIN',
+        :long => '--timeout MIN',
+        :description => 'Set timeout for stack creation',
+        :proc => lambda {|val|
+          Chef::Config[:knife][:cloudformation][:options][:timeout_in_minutes] = val
+        }
+      )
+      option(:rollback,
+        :short => '-R',
+        :long => '--[no]-rollback',
+        :description => 'Rollback on stack creation failure',
+        :boolean => true,
+        :default => true,
+        :proc => lambda {|val| Chef::Config[:knife][:cloudformation][:options][:disable_rollback] = !val }
+      )
+      option(:capability,
+        :short => '-C CAPABILITY',
+        :long => '--capability CAPABILITY',
+        :description => 'Specify allowed capabilities. Can be used multiple times.',
+        :proc => lambda {|val|
+          Chef::Config[:knife][:cloudformation][:options][:capabilities] ||= []
+          Chef::Config[:knife][:cloudformation][:options][:capabilities].push(val).uniq!
+        }
+      )
+      option(:notifications,
+        :long => '--notification ARN',
+        :description => 'Add notification ARN. Can be used multiple times.',
+        :proc => lambda {|val|
+          Chef::Config[:knife][:cloudformation][:options][:notification_ARNs] ||= []
+          Chef::Config[:knife][:cloudformation][:options][:notification_ARNs].push(val).uniq!
+        }
+      )
+      option(:print_only,
+        :long => '--print-only',
+        :description => 'Print template and exit'
+      )
+      option(:apply_stacks,
+        :long => '--apply-stack NAME_OR_ID',
+        :description => 'Autofill parameters using existing stack outputs. Can be used multiple times',
+        :proc => lambda {|val|
+          Chef::Config[:knife][:cloudformation][:create] ||= Mash.new
+          Chef::Config[:knife][:cloudformation][:create][:apply_stacks] ||= []
+          Chef::Config[:knife][:cloudformation][:create][:apply_stacks].push(val).uniq!
+        }
+      )
 
-              attr_accessor :action_type
-
-              option(:parameter,
-                :short => '-p KEY:VALUE',
-                :long => '--parameter KEY:VALUE',
-                :description => 'Set parameter. Can be used multiple times.',
-                :proc => lambda {|val|
-                  parts = val.split(':')
-                  key = parts.first
-                  value = parts[1, parts.size].join(':')
-                  Chef::Config[:knife][:cloudformation][:options][:parameters] ||= Mash.new
-                  Chef::Config[:knife][:cloudformation][:options][:parameters][key] = value
-                }
-              )
-              option(:timeout,
-                :short => '-t MIN',
-                :long => '--timeout MIN',
-                :description => 'Set timeout for stack creation',
-                :proc => lambda {|val|
-                  Chef::Config[:knife][:cloudformation][:options][:timeout_in_minutes] = val
-                }
-              )
-              option(:rollback,
-                :short => '-R',
-                :long => '--[no]-rollback',
-                :description => 'Rollback on stack creation failure',
-                :boolean => true,
-                :default => true,
-                :proc => lambda {|val| Chef::Config[:knife][:cloudformation][:options][:disable_rollback] = !val }
-              )
-              option(:capability,
-                :short => '-C CAPABILITY',
-                :long => '--capability CAPABILITY',
-                :description => 'Specify allowed capabilities. Can be used multiple times.',
-                :proc => lambda {|val|
-                  Chef::Config[:knife][:cloudformation][:options][:capabilities] ||= []
-                  Chef::Config[:knife][:cloudformation][:options][:capabilities].push(val).uniq!
-                }
-              )
-              option(:processing,
-                :long => '--[no-]processing',
-                :description => 'Call the unicorns and explode the glitter bombs',
-                :boolean => true,
-                :default => false,
-                :proc => lambda {|val| Chef::Config[:knife][:cloudformation][:processing] = val }
-              )
-              option(:polling,
-                :long => '--[no-]poll',
-                :description => 'Enable stack event polling.',
-                :boolean => true,
-                :default => true,
-                :proc => lambda {|val| Chef::Config[:knife][:cloudformation][:poll] = val }
-              )
-              option(:notifications,
-                :long => '--notification ARN',
-                :description => 'Add notification ARN. Can be used multiple times.',
-                :proc => lambda {|val|
-                  Chef::Config[:knife][:cloudformation][:options][:notification_ARNs] ||= []
-                  Chef::Config[:knife][:cloudformation][:options][:notification_ARNs].push(val).uniq!
-                }
-              )
-              option(:file,
-                :short => '-f PATH',
-                :long => '--file PATH',
-                :description => 'Path to Cloud Formation to process',
-                :proc => lambda {|val|
-                  Chef::Config[:knife][:cloudformation][:file] = val
-                }
-              )
-              option(:interactive_parameters,
-                :long => '--[no-]parameter-prompts',
-                :boolean => true,
-                :default => true,
-                :description => 'Do not prompt for input on dynamic parameters',
-                :default => true
-              )
-              option(:print_only,
-                :long => '--print-only',
-                :description => 'Print template and exit'
-              )
-              option(:base_directory,
-                :long => '--cloudformation-directory PATH',
-                :description => 'Path to cloudformation directory',
-                :proc => lambda {|val| Chef::Config[:knife][:cloudformation][:base_directory] = val}
-              )
-              option(:no_base_directory,
-                :long => '--no-cloudformation-directory',
-                :description => 'Unset any value used for cloudformation path',
-                :proc => lambda {|*val| Chef::Config[:knife][:cloudformation][:base_directory] = nil}
-              )
-
-              %w(rollback polling interactive_parameters).each do |key|
-                if(Chef::Config[:knife][:cloudformation][key].nil?)
-                  Chef::Config[:knife][:cloudformation][key] = true
-                end
-              end
-            end
+      # Run the stack creation command
+      def run
+        name = name_args.first
+        unless(name)
+          ui.fatal "Formation name must be specified!"
+          exit 1
+        end
+        if(Chef::Config[:knife][:cloudformation][:template])
+          file = Chef::Config[:knife][:cloudformation][:template]
+        else
+          file = load_template_file
+        end
+        ui.info "#{ui.color('Cloud Formation:', :bold)} #{ui.color('create', :green)}"
+        stack_info = "#{ui.color('Name:', :bold)} #{name}"
+        if(Chef::Config[:knife][:cloudformation][:path])
+          stack_info << " #{ui.color('Path:', :bold)} #{Chef::Config[:knife][:cloudformation][:file]}"
+          if(Chef::Config[:knife][:cloudformation][:disable_processing])
+            stack_info << " #{ui.color('(not pre-processed)', :yellow)}"
           end
+        end
+        ui.info "  -> #{stack_info}"
+
+        file = translate_template(file)
+
+        stack = provider.stacks.new(
+          Chef::Config[:knife][:cloudformation][:options].dup.merge(
+            :stack_name => name,
+            :template => file
+          )
+        )
+
+        apply_stacks!(stack)
+
+        if(config[:print_only])
+          ui.warn 'Print only requested'
+          ui.info _format_json(stack.load_template)
+          exit 1
+        end
+
+        populate_parameters!(stack.load_template)
+
+        stack.parameters = Chef::Config[:knife][:cloudformation][:options][:parameters]
+        stack.create
+
+        if(Chef::Config[:knife][:cloudformation][:poll])
+          poll_stack(stack.stack_name)
+          if(stack.success?)
+            ui.info "Stack create complete: #{ui.color('SUCCESS', :green)}"
+            knife_output = Chef::Knife::CloudformationDescribe.new
+            knife_output.name_args.push(name)
+            knife_output.config[:outputs] = true
+            knife_output.run
+          else
+            ui.fatal "Create of new stack #{ui.color(name, :bold)}: #{ui.color('FAILED', :red, :bold)}"
+            ui.info ""
+            knife_inspect = Chef::Knife::CloudformationInspect.new
+            knife_inspect.name_args.push(name)
+            knife_inspect.config[:instance_failure] = true
+            knife_inspect.run
+            exit 1
+          end
+        else
+          ui.warn 'Stack state polling has been disabled.'
+          ui.info "Stack creation initialized for #{ui.color(name, :green)}"
         end
       end
 
-      include Options
-
-      def run
-        create_or_update_run(:create)
+      # Apply any defined remote stacks
+      #
+      # @param stack [Fog::Orchestration::Stack]
+      # @return [Fog::Orchestration::Stack]
+      def apply_stacks!(stack)
+        remote_stacks = Chef::Config[:knife][:cloudformation].
+          fetch(:create, {}).fetch(:apply_stacks, [])
+        remote_stacks.each do |stack_name|
+          remote_stack = provider.stacks.get(stack_name)
+          if(remote_stack)
+            stack.apply_stack(remote_stack)
+          else
+            ui.error "Failed to apply requested stack. Unable to locate. (#{stack_name})"
+            exit 1
+          end
+        end
+        stack
       end
 
     end

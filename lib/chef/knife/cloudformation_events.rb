@@ -1,12 +1,13 @@
-require 'knife-cloudformation/cloudformation_base'
+require 'knife-cloudformation'
 
 class Chef
   class Knife
+    # Cloudformation list command
     class CloudformationEvents < Knife
 
       banner 'knife cloudformation events NAME'
 
-      include KnifeCloudformation::KnifeBase
+      include KnifeCloudformation::Knife::Base
 
       option(:polling,
         :short => '-p',
@@ -41,28 +42,58 @@ class Chef
         :description => 'Print all attributes'
       )
 
+      # Run the events list action
       def run
         name = name_args.first
         ui.info "Cloud Formation Events for Stack: #{ui.color(name, :bold)}\n"
-        things_output(name, get_events(name), 'events')
-        if(Chef::Config[:knife][:cloudformation][:poll])
-          while(stack(name).in_progress?)
-            sleep(Chef::Config[:knife][:cloudformation][:poll_delay] || 15)
-            things_output(nil, get_events(name), 'events', :no_title, :ignore_empty_output)
+        stack = provider.stacks.find{|s| s.stack_name == name}
+        last_id = nil
+        if(stack)
+          events = get_events(stack)
+          things_output(name, events, 'events')
+          last_id = events.last[:id]
+          if(Chef::Config[:knife][:cloudformation][:poll])
+            while(stack.in_progress?)
+              sleep(Chef::Config[:knife][:cloudformation][:poll_delay] || 15)
+              stack.events.reload
+              events = get_events(stack, last_id)
+              unless(events.empty?)
+                last_id = events.last[:id]
+                things_output(nil, events, 'events', :no_title, :ignore_empty_output)
+              end
+            end
+            # Extra to see completion
+            things_output(nil, get_events(stack, last_id), 'events', :no_title, :ignore_empty_output)
           end
-          # Extra to see completion
-          things_output(nil, get_events(name), 'events', :no_title, :ignore_empty_output)
+        else
+          ui.fatal "Failed to locate requested stack: #{ui.color(name, :bold, :red)}"
+          exit -1
         end
       end
 
-      def get_events(name)
+      # Fetch events from stack
+      #
+      # @param stack [Fog::Orchestration::Stack]
+      # @param last_id [String] only return events after this ID
+      # @return [Array<Hash>]
+      def get_events(stack, last_id=nil)
         get_things do
-          stack(name).events
+          stack_events = stack.events
+          if(last_id)
+            start_index = stack_events.index{|event| event.id == last_id}
+            events = stack_events.slice(0, start_index.to_i)
+          else
+            events = stack_events
+          end
+          events.map do |event|
+            Mash.new(event.attributes)
+          end
         end
       end
 
+      # @return [Array<String>] default attributes for events
       def default_attributes
-        %w(Timestamp LogicalResourceId ResourceType ResourceStatus ResourceStatusReason)
+        %w(event_time logical_resource_id resource_status resource_status_reason)
       end
     end
   end
